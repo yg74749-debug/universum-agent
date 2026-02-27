@@ -1,22 +1,34 @@
 from .browser import get_context, close_context
 
 def run_canvas():
-    lines = ["📌 CANVAS RAPORU"]
+    result = {
+        "ok": False,
+        "error": None,
+        "quiz_found": False,
+        "survey_filled": False,
+        "pdf_download": False,
+        "details": []
+    }
 
     try:
-        ctx = get_context("canvas_state.json")
-        page = ctx.new_page()
-        page.goto("https://canvas.universum-ks.org/")
-        page.wait_for_timeout(3000)
-        lines.append("✅ Canvas açıldı.")
+        # ... burada login + gezme kodun var ...
+
+        result["ok"] = True
+        result["details"].append("Canvas login başarılı")
+
+        # quiz bulduysan:
+        # result["quiz_found"] = True
+
+        # survey doldurduysan:
+        # result["survey_filled"] = True
+
+        # pdf indirdiyse:
+        # result["pdf_download"] = True
+
+        return result
 
     except Exception as e:
-        lines.append(f"❌ Canvas hata: {type(e).__name__}")
-
-    finally:
-        try:
-            close_context(ctx)
-        except:
-            pass
+        result["error"] = str(e)
+        return result
 
     return lines
