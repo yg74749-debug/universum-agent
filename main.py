@@ -1,86 +1,88 @@
 # main.py
-import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from telegram_notify import send_telegram
 from portals.ums import run_ums
 from portals.canvas import run_canvas
-from telegram_notify import send_telegram
 
-TZ = ZoneInfo("Europe/Belgrade")  # Prishtina ile aynı saat dilimi
+TZ = ZoneInfo("Europe/Belgrade")  # Prishtina/Belgrade aynı saat
 
-def now_local() -> datetime:
-    return datetime.now(tz=TZ)
+def slot_of_day(dt: datetime) -> int:
+    return (dt.hour // 3) + 1  # 0-2 =>1, 3-5=>2 ... 21-23=>8
 
-def run_slot(dt: datetime) -> int:
-    # 00-02 => 1, 03-05 => 2, ... 21-23 => 8
-    return (dt.hour // 3) + 1
+def format_report(now: datetime, ums: dict, canvas: dict) -> str:
+    slot = slot_of_day(now)
 
-def is_daily_report(dt: datetime) -> bool:
-    # Daily workflow ile env üzerinden kontrol edeceğiz
-    return os.getenv("DAILY_REPORT", "0") == "1"
-
-def main():
-    dt = now_local()
-    slot = run_slot(dt)
-    daily = is_daily_report(dt)
-
-    header = f"[MAIN] RUN SLOT {slot}/8 | {dt.isoformat()}"
-    print(header)
-
-    report_lines = []
-    report_lines.append(f"📊 RUN SLOT {slot}/8" + (" (GÜNLÜK RAPOR)" if daily else ""))
-    report_lines.append(f"🕒 Saat: {dt.strftime('%Y-%m-%d %H:%M:%S')} (Prishtina)")
-
-    ums = run_ums()
-    canvas = run_canvas()
-
-    # --- UMS rapor formatı ---
-    report_lines.append("\n📌 UMS RAPORU")
-    if ums["ok"]:
-        report_lines.append("✅ UMS açıldı.")
+    lines = []
+    lines.append(f"📊 RUN SLOT {slot}/8")
+    lines.append(f"🕒 Saat: {now.strftime('%Y-%m-%d %H:%M:%S')} (Prishtina)")
+    lines.append("")
+    lines.append("📌 UMS RAPORU")
+    if ums.get("error"):
+        lines.append(f"❌ UMS hata: {ums['error']}")
     else:
-        report_lines.append(f"❌ UMS hata: {ums['error']}")
+        lines.append("✅ UMS açıldı." if ums.get("ok") else "❌ UMS açılamadı.")
+    lines.append(f"• 'Mali Yükümlülük' yakalandı mı? {'EVET' if ums.get('financial_block') else 'HAYIR'}")
+    lines.append(f"• Sınav kaydı bulundu mu? {'EVET' if ums.get('exam_found') else 'HAYIR'}")
 
-    report_lines.append(f"• 'Mali Yükümlülük' yakalandı mı? {'EVET' if ums.get('financial_block') else 'HAYIR'}")
-    report_lines.append(f"• Sınav kaydı bulundu mu? {'EVET' if ums.get('exam_found') else 'HAYIR'}")
     if ums.get("exam_items"):
-        # spam olmasın: en fazla 5 satır
-        report_lines.append("🧾 Sınavlar (ilk 5):")
-        for x in ums["exam_items"][:5]:
-            report_lines.append(f"  - {x}")
+        lines.append("🧾 Sınavlar (ilk 5):")
+        for it in ums["exam_items"][:5]:
+            lines.append(f"  - {it}")
+
     if ums.get("details"):
-        report_lines.append("🧾 Detaylar:")
+        lines.append("🧾 Detaylar:")
         for d in ums["details"][:8]:
-            report_lines.append(f"  - {d}")
+            lines.append(f"  - {d}")
 
-    # --- Canvas rapor formatı ---
-    report_lines.append("\n📌 CANVAS RAPORU")
-    if canvas["ok"]:
-        report_lines.append("✅ Canvas açıldı.")
+    lines.append("")
+    lines.append("📌 CANVAS RAPORU")
+    if canvas.get("error"):
+        lines.append(f"❌ Canvas hata: {canvas['error']}")
     else:
-        report_lines.append(f"❌ Canvas hata: {canvas['error']}")
-
-    report_lines.append(f"• Quiz/Survey bulundu mu? {'EVET' if canvas.get('quiz_found') else 'HAYIR'}")
-    report_lines.append(f"• Survey otomatik dolduruldu mu? {'EVET' if canvas.get('survey_filled') else 'HAYIR'}")
-    report_lines.append(f"• PDF indirme denendi mi? {'EVET' if canvas.get('pdf_download') else 'HAYIR'}")
+        lines.append("✅ Canvas açıldı." if canvas.get("ok") else "❌ Canvas açılamadı.")
+    lines.append(f"• Quiz/Survey bulundu mu? {'EVET' if canvas.get('quiz_found') else 'HAYIR'}")
+    lines.append(f"• Survey otomatik dolduruldu mu? {'EVET' if canvas.get('survey_filled') else 'HAYIR'}")
+    lines.append(f"• PDF indirme denendi mi? {'EVET' if canvas.get('pdf_download') else 'HAYIR'}")
 
     if canvas.get("found_links"):
-        report_lines.append("🔗 Bulunanlar (ilk 5):")
+        lines.append("🔗 Bulunan linkler (ilk 5):")
         for u in canvas["found_links"][:5]:
-            report_lines.append(f"  - {u}")
+            lines.append(f"  - {u}")
 
     if canvas.get("details"):
-        report_lines.append("🧾 Detaylar:")
-        for d in canvas["details"][:10]:
-            report_lines.append(f"  - {d}")
+        lines.append("🧾 Detaylar:")
+        for d in canvas["details"][:8]:
+            lines.append(f"  - {d}")
 
-    msg = "\n".join(report_lines)
+    return "\n".join(lines)
+
+def main():
+    now = datetime.now(TZ)
+    print(f"[MAIN] RUN SLOT {slot_of_day(now)}/8 | {now.isoformat()}")
+
+    # UMS
+    ums = {}
+    try:
+        ums = run_ums()
+    except Exception as e:
+        ums = {"ok": False, "error": f"UMS crash: {str(e)}"}
+
+    # CANVAS
+    canvas = {}
+    try:
+        canvas = run_canvas()
+    except Exception as e:
+        canvas = {"ok": False, "error": f"Canvas crash: {str(e)}"}
+
+    report = format_report(now, ums, canvas)
+
     print("\n===== TELEGRAM RAPOR =====")
-    print(msg)
-    print("==========================")
+    print(report)
+    print("==========================\n")
 
-    send_telegram(msg)
+    send_telegram(report)
 
 if __name__ == "__main__":
     main()
