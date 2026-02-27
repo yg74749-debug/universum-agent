@@ -5,21 +5,9 @@ from .browser import get_context, close_context, debug_page
 
 UMS_BASE = "https://ums-student-portal.universum-ks.org/"
 
-def _has_financial_block_text(text: str) -> bool:
-    tl = (text or "").lower()
-    keys = [
-        "mali yükümlülük", "mali yukumluluk",
-        "detyrim financiar", "keni një detyrim financiar",
-        "borxh", "financial obligation"
-    ]
-    return any(k in tl for k in keys)
-
-def _safe_preview(obj, maxlen=240):
-    try:
-        s = json.dumps(obj, ensure_ascii=False)
-    except Exception:
-        s = str(obj)
-    return (s[:maxlen] + "...") if len(s) > maxlen else s
+def _clip(s: str, n: int = 140) -> str:
+    s = (s or "").replace("\n", " ").strip()
+    return s[:n] + ("..." if len(s) > n else "")
 
 def run_ums():
     result = {
@@ -39,194 +27,134 @@ def run_ums():
         ctx = get_context("ums_state.json")
         page = ctx.new_page()
 
-        # --- NETWORK CAPTURE ---
-        captured = {
-            "json_hits": [],      # (url, status)
-            "candidates": [],     # urls that look like endpoints we care about
-            "parsed": []          # small previews
+        # ---- NETWORK CAPTURE (AGGRESSIVE) ----
+        net = {
+            "req_total": 0,
+            "resp_total": 0,
+            "by_type": {},           # resourceType -> count
+            "xhr_fetch": [],         # last 30
+            "other": [],             # last 30
+            "json_hits": [],         # last 30 (url,status,ctype)
+            "domains": {},           # domain -> count
         }
 
-        def on_response(resp):
+        def _domain(url: str) -> str:
             try:
-                url = resp.url or ""
-                status = resp.status
-                ctype = (resp.headers.get("content-type", "") or "").lower()
+                return url.split("/")[2]
+            except Exception:
+                return "unknown"
 
-                # sadece universum alanı + json/ api tipleri
-                if "ums-student-portal.universum-ks.org" not in url:
-                    return
+        def on_request(req):
+            try:
+                net["req_total"] += 1
+                rtype = req.resource_type or "unknown"
+                net["by_type"][rtype] = net["by_type"].get(rtype, 0) + 1
 
-                # aday endpoint: exam/provim/registration/payment
-                key = url.lower()
-                if any(k in key for k in ["exam", "provim", "registration", "regjistr", "payment", "pagesa", "invoice", "fee", "finance", "obligation"]):
-                    if url not in captured["candidates"]:
-                        captured["candidates"].append(url)
+                u = req.url or ""
+                d = _domain(u)
+                net["domains"][d] = net["domains"].get(d, 0) + 1
 
-                if "application/json" in ctype:
-                    captured["json_hits"].append((url, status))
+                item = f"{rtype} | {req.method} | {u}"
+                if rtype in ("xhr", "fetch"):
+                    net["xhr_fetch"].append(item)
+                    net["xhr_fetch"] = net["xhr_fetch"][-30:]
+                else:
+                    net["other"].append(item)
+                    net["other"] = net["other"][-30:]
             except Exception:
                 pass
 
+        def on_response(resp):
+            try:
+                net["resp_total"] += 1
+                u = resp.url or ""
+                status = resp.status
+                ctype = (resp.headers.get("content-type", "") or "").lower()
+                if "json" in ctype:
+                    net["json_hits"].append((u, status, ctype))
+                    net["json_hits"] = net["json_hits"][-30:]
+            except Exception:
+                pass
+
+        page.on("request", on_request)
         page.on("response", on_response)
 
-        # Login sonrası menü renderını tetiklemek için profile aç
+        # ---- GO LOGIN LANDING ----
         page.goto(urljoin(UMS_BASE, "Profile"), wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(2500)
+        page.wait_for_timeout(3500)
 
         result["ok"] = True
         result["details"].append("UMS login başarılı")
         print("[UMS] ✅ Login OK")
+
         print("[UMS] DEBUG after login")
         debug_page(page, "UMS")
 
-        # Birkaç kritik route gez (network endpointleri tetiklemek için)
+        # ---- STORAGE DUMP (IMPORTANT) ----
+        try:
+            storage = page.evaluate("""
+            () => {
+              const ls = {};
+              const ss = {};
+              try { for (let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); ls[k]=localStorage.getItem(k); } } catch(e){}
+              try { for (let i=0;i<sessionStorage.length;i++){ const k=sessionStorage.key(i); ss[k]=sessionStorage.getItem(k); } } catch(e){}
+              return { localStorage: ls, sessionStorage: ss, href: location.href };
+            }
+            """)
+            # çok uzamasın diye sadece key listesi yaz
+            ls_keys = list((storage.get("localStorage") or {}).keys())
+            ss_keys = list((storage.get("sessionStorage") or {}).keys())
+            print(f"[UMS] localStorage keys ({len(ls_keys)}): {ls_keys[:30]}")
+            print(f"[UMS] sessionStorage keys ({len(ss_keys)}): {ss_keys[:30]}")
+            result["details"].append(f"localStorage key sayısı: {len(ls_keys)}")
+            result["details"].append(f"sessionStorage key sayısı: {len(ss_keys)}")
+        except Exception as e:
+            result["details"].append(f"Storage dump hata: {str(e)[:80]}")
+
+        # ---- TRIGGER SOME ROUTES (to force API calls) ----
         routes = [
             "StudentExamRegistration/List",
+            "StudentExamRegistration",
             "ExamRegistration",
+            "ExamRegistration/List",
             "MyExams",
             "Payments",
             "StudentPayments",
-            "ExamRegistration/List",
+            "Payment",
+            "Payment/List",
         ]
+
         for r in routes:
             url = urljoin(UMS_BASE, r)
             print(f"[UMS] Visiting route: {url}")
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(2500)
-                # finansal blok metnini UI text'ten yakala
-                try:
-                    body = page.inner_text("body")
-                    if _has_financial_block_text(body):
-                        result["financial_block"] = True
-                except Exception:
-                    pass
+                page.wait_for_timeout(3500)
             except Exception as e:
                 result["details"].append(f"Route hata: {url} -> {str(e)[:80]}")
 
-        # --- JSON endpointleri listele (debug için) ---
-        result["details"].append(f"JSON hit sayısı: {len(captured['json_hits'])}")
-        result["details"].append(f"Endpoint aday sayısı: {len(captured['candidates'])}")
+        # ---- PRINT NETWORK SUMMARY ----
+        top_domains = sorted(net["domains"].items(), key=lambda x: x[1], reverse=True)[:8]
+        top_types = sorted(net["by_type"].items(), key=lambda x: x[1], reverse=True)
 
-        print(f"[UMS] JSON hits: {len(captured['json_hits'])}")
-        print(f"[UMS] Candidates: {len(captured['candidates'])}")
+        print(f"[UMS] REQ total: {net['req_total']} | RESP total: {net['resp_total']}")
+        print(f"[UMS] Types: {top_types}")
+        print(f"[UMS] Top domains: {top_domains}")
 
-        # Öncelik: JSON hit'lerden exam/registration geçenleri sırala
-        json_urls = [u for (u, s) in captured["json_hits"] if s == 200]
-        priority = []
-        for u in json_urls:
-            k = u.lower()
-            if any(x in k for x in ["exam", "provim", "registration", "regjistr"]):
-                priority.append(u)
-        # fallback: candidates listesinden json olmasa bile dene (bazı api'ler text/json dönebiliyor)
-        for u in captured["candidates"]:
-            if u not in priority:
-                priority.append(u)
+        print(f"[UMS] XHR/FETCH last {len(net['xhr_fetch'])}:")
+        for line in net["xhr_fetch"]:
+            print("[UMS]   " + _clip(line, 220))
 
-        # Çok uzamasın
-        priority = priority[:25]
+        print(f"[UMS] JSON hits last {len(net['json_hits'])}:")
+        for (u, st, ct) in net["json_hits"]:
+            print("[UMS]   " + _clip(f"{st} | {u} | {ct}", 220))
 
-        # --- endpoint parse denemesi ---
-        def try_parse_url(api_url: str):
-            try:
-                # aynı sayfada fetch ile al (cookie taşınır)
-                js = """
-                async (u) => {
-                  try {
-                    const r = await fetch(u, { credentials: 'include' });
-                    const ct = (r.headers.get('content-type') || '').toLowerCase();
-                    const status = r.status;
-                    let dataText = await r.text();
-                    return { status, ct, dataText };
-                  } catch (e) {
-                    return { status: -1, ct: '', dataText: String(e) };
-                  }
-                }
-                """
-                out = page.evaluate(js, api_url)
-                status = out.get("status")
-                ct = out.get("ct", "")
-                txt = out.get("dataText", "")
+        # telegrama da özet düş
+        result["details"].append(f"REQ total: {net['req_total']} / RESP total: {net['resp_total']}")
+        result["details"].append(f"JSON hit sayısı: {len(net['json_hits'])}")
+        result["details"].append(f"Top domains: {top_domains}")
 
-                if status != 200:
-                    return None
-
-                # json parse
-                data = None
-                if "application/json" in (ct or "").lower():
-                    data = json.loads(txt)
-                else:
-                    # bazıları json ama content-type yanlış
-                    try:
-                        data = json.loads(txt)
-                    except Exception:
-                        return None
-
-                return data
-            except Exception:
-                return None
-
-        parsed_any = None
-        parsed_from = None
-
-        for api_url in priority:
-            data = try_parse_url(api_url)
-            if data is None:
-                continue
-
-            parsed_any = data
-            parsed_from = api_url
-            captured["parsed"].append((api_url, _safe_preview(data, 260)))
-
-            # data içinde anlamlı “list” arıyoruz
-            # çok farklı şekillerde gelebilir: {items:[...]}, {data:[...]}, [...]
-            break
-
-        if parsed_any is None:
-            result["details"].append("API JSON parse edilemedi (cookie/state eksik veya endpoint yok).")
-            return result
-
-        result["details"].append(f"JSON parse OK: {parsed_from}")
-        result["details"].append(f"JSON preview: {captured['parsed'][0][1]}")
-
-        # --- exam item çıkarma (genel) ---
-        items = []
-
-        def add_item(s: str):
-            s = (s or "").strip()
-            if not s:
-                return
-            if len(s) < 6:
-                return
-            if s not in items:
-                items.append(s)
-
-        def walk(obj, depth=0):
-            if depth > 5:
-                return
-            if isinstance(obj, dict):
-                # olası alanlar
-                for k in ["course", "courseName", "subject", "name", "title"]:
-                    if k in obj and isinstance(obj[k], str):
-                        add_item(obj[k])
-                for k in ["date", "examDate", "startDate", "time", "startTime", "room", "location", "status"]:
-                    if k in obj and isinstance(obj[k], (str, int, float)):
-                        add_item(f"{k}: {obj[k]}")
-                for v in obj.values():
-                    walk(v, depth+1)
-            elif isinstance(obj, list):
-                for v in obj[:50]:
-                    walk(v, depth+1)
-
-        walk(parsed_any)
-
-        if items:
-            result["exam_found"] = True
-            result["exam_items"] = items[:10]
-            result["details"].append(f"Exam item çıkarıldı: {len(items)}")
-        else:
-            result["details"].append("JSON geldi ama exam item çıkarılamadı (format farklı).")
-
+        # şimdilik sadece debug topluyoruz
         return result
 
     except Exception as e:
