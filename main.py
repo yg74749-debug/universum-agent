@@ -103,3 +103,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    msg = "\n".join(report) if report else "Hiçbir veri çekilemedi."
+print("\n===== TELEGRAM RAPOR =====")
+print(msg)
+print("==========================\n")
+send_telegram(msg)
