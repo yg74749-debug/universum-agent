@@ -20,8 +20,8 @@ jobs:
 
       - name: Create session files from secrets
         run: |
-          echo "${{ secrets.UMS_STATE_JSON }}" > ums_state.json
-          echo "${{ secrets.CANVAS_STATE_JSON }}" > canvas_state.json
+          echo "${{ secrets.UMS_STATE_B64 }}" | base64 -d > ums_state.json
+echo "${{ secrets.CANVAS_STATE_B64 }}" | base64 -d > canvas_state.json
 
       - name: Run bot
         env:
