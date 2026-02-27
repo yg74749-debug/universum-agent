@@ -1,42 +1,38 @@
+# portals/browser.py
 from playwright.sync_api import sync_playwright
 
-def get_context(storage_state_path: str):
-    pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
-    context = browser.new_context(storage_state=storage_state_path)
-    page = context.new_page()
-    return pw, browser, context, page
 
-def close_context(pw, browser, context):
+def get_context(storage_file=None):
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch(headless=True)
+
+    if storage_file:
+        ctx = browser.new_context(storage_state=storage_file)
+    else:
+        ctx = browser.new_context()
+
+    return ctx
+
+
+def close_context(ctx):
     try:
-        context.close()
-    except Exception:
-        pass
-    try:
+        browser = ctx.browser
+        ctx.close()
         browser.close()
     except Exception:
         pass
+
+
+def debug_page(page, name="PAGE"):
+    """
+    Sayfanın URL, title ve kısa text snippetini loga basar
+    """
     try:
-        pw.stop()
-    except Exception:
-        pass
-        def debug_page(page, tag=""):
-    try:
-        url = page.url
-    except Exception:
-        url = "?"
-    try:
-        title = page.title()
-    except Exception:
-        title = "?"
-    try:
-        text = page.inner_text("body") or ""
-        text_len = len(text)
-        snippet = text[:400].replace("\n", " ").replace("\r", " ")
-    except Exception:
-        text_len = -1
-        snippet = "?"
-    print(f"[{tag}] URL: {url}")
-    print(f"[{tag}] TITLE: {title}")
-    print(f"[{tag}] BODY_LEN: {text_len}")
-    print(f"[{tag}] SNIP: {snippet}")
+        print(f"[{name}] URL:", page.url)
+        print(f"[{name}] TITLE:", page.title())
+
+        body = page.inner_text("body")[:400].replace("\n", " ")
+        print(f"[{name}] SNIPPET:", body)
+
+    except Exception as e:
+        print(f"[{name}] DEBUG ERROR:", str(e))
