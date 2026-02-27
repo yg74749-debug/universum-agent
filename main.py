@@ -1,69 +1,84 @@
+# main.py
 import os
-import datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from portals.ums import run_ums
 from portals.canvas import run_canvas
 from telegram_notify import send_telegram
 
-TZ = ZoneInfo("Europe/Belgrade")  # Prishtina ile aynı
+TZ = ZoneInfo("Europe/Belgrade")  # Prishtina ile aynı saat dilimi
 
-def format_ums(res: dict) -> list[str]:
-    lines = []
-    lines.append("📌 UMS RAPORU")
-    if res.get("ok"):
-        lines.append("✅ UMS RAPORU açıldı.")
-    else:
-        lines.append(f"❌ UMS RAPORU hata: {res.get('error')}")
-    lines.append(f"• 'Mali Yükümlülük' yakalandı mı? {'EVET' if res.get('financial_block') else 'HAYIR'}")
-    lines.append(f"• Sınav kaydı bulundu mu? {'EVET' if res.get('exam_found') else 'HAYIR'}")
-    if res.get("details"):
-        lines.append("🧾 Detaylar:")
-        for d in res["details"]:
-            lines.append(f"  - {d}")
-    return lines
+def now_local() -> datetime:
+    return datetime.now(tz=TZ)
 
-def format_canvas(res: dict) -> list[str]:
-    lines = []
-    lines.append("📌 CANVAS RAPORU")
-    if res.get("ok"):
-        lines.append("✅ CANVAS RAPORU açıldı.")
-    else:
-        lines.append(f"❌ CANVAS RAPORU hata: {res.get('error')}")
-    lines.append(f"• Quiz/Survey bulundu mu? {'EVET' if res.get('quiz_found') else 'HAYIR'}")
-    lines.append(f"• Survey otomatik dolduruldu mu? {'EVET' if res.get('survey_filled') else 'HAYIR'}")
-    lines.append(f"• PDF indirme denendi mi? {'EVET' if res.get('pdf_download') else 'HAYIR'}")
-    if res.get("details"):
-        lines.append("🧾 Detaylar:")
-        for d in res["details"]:
-            lines.append(f"  - {d}")
-    return lines
+def run_slot(dt: datetime) -> int:
+    # 00-02 => 1, 03-05 => 2, ... 21-23 => 8
+    return (dt.hour // 3) + 1
+
+def is_daily_report(dt: datetime) -> bool:
+    # Daily workflow ile env üzerinden kontrol edeceğiz
+    return os.getenv("DAILY_REPORT", "0") == "1"
 
 def main():
-    run_no = os.getenv("GITHUB_RUN_NUMBER") or "?"
-    now = datetime.datetime.now(TZ)
+    dt = now_local()
+    slot = run_slot(dt)
+    daily = is_daily_report(dt)
 
-    print(f"\n[MAIN] BOT RUN #{run_no} | {now.isoformat()}")
+    header = f"[MAIN] RUN SLOT {slot}/8 | {dt.isoformat()}"
+    print(header)
 
     report_lines = []
-    report_lines.append(f"📊 BOT RUN #{run_no}")
-    report_lines.append(f"🕒 Saat: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    report_lines.append(f"📊 RUN SLOT {slot}/8" + (" (GÜNLÜK RAPOR)" if daily else ""))
+    report_lines.append(f"🕒 Saat: {dt.strftime('%Y-%m-%d %H:%M:%S')} (Prishtina)")
 
-    # UMS
-    ums_res = run_ums()
-    report_lines.append("")  # boş satır
-    report_lines += format_ums(ums_res)
+    ums = run_ums()
+    canvas = run_canvas()
 
-    # CANVAS
-    canvas_res = run_canvas()
-    report_lines.append("")
-    report_lines += format_canvas(canvas_res)
+    # --- UMS rapor formatı ---
+    report_lines.append("\n📌 UMS RAPORU")
+    if ums["ok"]:
+        report_lines.append("✅ UMS açıldı.")
+    else:
+        report_lines.append(f"❌ UMS hata: {ums['error']}")
+
+    report_lines.append(f"• 'Mali Yükümlülük' yakalandı mı? {'EVET' if ums.get('financial_block') else 'HAYIR'}")
+    report_lines.append(f"• Sınav kaydı bulundu mu? {'EVET' if ums.get('exam_found') else 'HAYIR'}")
+    if ums.get("exam_items"):
+        # spam olmasın: en fazla 5 satır
+        report_lines.append("🧾 Sınavlar (ilk 5):")
+        for x in ums["exam_items"][:5]:
+            report_lines.append(f"  - {x}")
+    if ums.get("details"):
+        report_lines.append("🧾 Detaylar:")
+        for d in ums["details"][:8]:
+            report_lines.append(f"  - {d}")
+
+    # --- Canvas rapor formatı ---
+    report_lines.append("\n📌 CANVAS RAPORU")
+    if canvas["ok"]:
+        report_lines.append("✅ Canvas açıldı.")
+    else:
+        report_lines.append(f"❌ Canvas hata: {canvas['error']}")
+
+    report_lines.append(f"• Quiz/Survey bulundu mu? {'EVET' if canvas.get('quiz_found') else 'HAYIR'}")
+    report_lines.append(f"• Survey otomatik dolduruldu mu? {'EVET' if canvas.get('survey_filled') else 'HAYIR'}")
+    report_lines.append(f"• PDF indirme denendi mi? {'EVET' if canvas.get('pdf_download') else 'HAYIR'}")
+
+    if canvas.get("found_links"):
+        report_lines.append("🔗 Bulunanlar (ilk 5):")
+        for u in canvas["found_links"][:5]:
+            report_lines.append(f"  - {u}")
+
+    if canvas.get("details"):
+        report_lines.append("🧾 Detaylar:")
+        for d in canvas["details"][:10]:
+            report_lines.append(f"  - {d}")
 
     msg = "\n".join(report_lines)
-
     print("\n===== TELEGRAM RAPOR =====")
     print(msg)
-    print("==========================\n")
+    print("==========================")
 
     send_telegram(msg)
 
