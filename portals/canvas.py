@@ -10,25 +10,50 @@ def run_canvas():
         "details": []
     }
 
+    print("\n[CANVAS] ===== START =====")
+
     try:
-        # ... burada login + gezme kodun var ...
+        context, page = get_context("canvas_state.json")
 
-        result["ok"] = True
-        result["details"].append("Canvas login başarılı")
+        print("[CANVAS] Dashboard açılıyor...")
+        page.goto("https://canvas.universum-ks.org/")
+        page.wait_for_timeout(3000)
 
-        # quiz bulduysan:
-        # result["quiz_found"] = True
+        if "login" not in page.url:
+            print("[CANVAS] ✅ Login OK")
+            result["ok"] = True
+            result["details"].append("Canvas login başarılı")
+        else:
+            print("[CANVAS] ❌ Login başarısız")
 
-        # survey doldurduysan:
-        # result["survey_filled"] = True
+        page_text = page.content()
 
-        # pdf indirdiyse:
-        # result["pdf_download"] = True
+        print("[CANVAS] Quiz aranıyor...")
+        if "Take the Quiz" in page_text or "Quiz" in page_text:
+            print("[CANVAS] 📌 Quiz bulundu")
+            result["quiz_found"] = True
+        else:
+            print("[CANVAS] Quiz yok")
 
+        print("[CANVAS] Survey aranıyor...")
+        if "Survey" in page_text:
+            print("[CANVAS] 📌 Survey bulundu (otomatik doldurma eklenebilir)")
+        else:
+            print("[CANVAS] Survey yok")
+
+        print("[CANVAS] PDF link aranıyor...")
+        if ".pdf" in page_text:
+            print("[CANVAS] 📥 PDF link bulundu")
+            result["pdf_download"] = True
+        else:
+            print("[CANVAS] PDF yok")
+
+        close_context(context)
+
+        print("[CANVAS] ===== END =====\n")
         return result
 
     except Exception as e:
+        print("[CANVAS] ❌ CRASH:", str(e))
         result["error"] = str(e)
         return result
-
-    return lines
