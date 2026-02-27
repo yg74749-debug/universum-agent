@@ -1,110 +1,71 @@
 import os
 import datetime
+from zoneinfo import ZoneInfo
 
 from portals.ums import run_ums
 from portals.canvas import run_canvas
 from telegram_notify import send_telegram
 
+TZ = ZoneInfo("Europe/Belgrade")  # Prishtina ile aynı
 
-def _now_str():
-    # GitHub runner UTC kullanır; saat göstermek için yeterli
-    return str(datetime.datetime.now())
-
-
-def _run_no():
-    # GitHub Actions her run’a otomatik bir numara verir (en sağlam çözüm)
-    return os.getenv("GITHUB_RUN_NUMBER", "?")
-
-
-def _format_portal_report(title: str, r):
-    """
-    r: dict bekliyoruz.
-    Örnek:
-      {
-        "ok": True/False,
-        "error": None/"...",
-        "details": ["...", "..."],
-        "quiz_found": bool,
-        ...
-      }
-    """
+def format_ums(res: dict) -> list[str]:
     lines = []
-    lines.append(f"📌 {title}")
-
-    if not isinstance(r, dict):
-        # Beklenmeyen dönüş tipi
-        lines.append(f"❌ {title} crash: Unexpected return type: {type(r).__name__}")
-        return lines
-
-    ok = bool(r.get("ok", False))
-    err = r.get("error")
-
-    if ok:
-        lines.append(f"✅ {title} açıldı.")
+    lines.append("📌 UMS RAPORU")
+    if res.get("ok"):
+        lines.append("✅ UMS RAPORU açıldı.")
     else:
-        # Hata varsa sebebiyle göster
-        if err:
-            lines.append(f"❌ {title} hata: {err}")
-        else:
-            lines.append(f"❌ {title} başarısız (sebep belirtilmedi).")
-
-    # Özel sinyaller (senin istediğin log/analiz maddeleri)
-    # Canvas tarafı
-    if title.upper() == "CANVAS RAPORU":
-        if "quiz_found" in r:
-            lines.append(f"• Quiz/Survey bulundu mu? {'EVET' if r.get('quiz_found') else 'HAYIR'}")
-        if "survey_filled" in r:
-            lines.append(f"• Survey otomatik dolduruldu mu? {'EVET' if r.get('survey_filled') else 'HAYIR'}")
-        if "pdf_download" in r:
-            lines.append(f"• PDF indirme denendi mi? {'EVET' if r.get('pdf_download') else 'HAYIR'}")
-
-    # UMS tarafı
-    if title.upper() == "UMS RAPORU":
-        if "financial_block" in r:
-            lines.append(f"• 'Mali Yükümlülük' yakalandı mı? {'EVET' if r.get('financial_block') else 'HAYIR'}")
-        if "exam_found" in r:
-            lines.append(f"• Sınav kaydı bulundu mu? {'EVET' if r.get('exam_found') else 'HAYIR'}")
-
-    # Detaylar (varsa)
-    details = r.get("details", [])
-    if isinstance(details, list) and details:
+        lines.append(f"❌ UMS RAPORU hata: {res.get('error')}")
+    lines.append(f"• 'Mali Yükümlülük' yakalandı mı? {'EVET' if res.get('financial_block') else 'HAYIR'}")
+    lines.append(f"• Sınav kaydı bulundu mu? {'EVET' if res.get('exam_found') else 'HAYIR'}")
+    if res.get("details"):
         lines.append("🧾 Detaylar:")
-        for d in details[:10]:  # spam olmasın diye 10 satır limit
+        for d in res["details"]:
             lines.append(f"  - {d}")
-
     return lines
 
+def format_canvas(res: dict) -> list[str]:
+    lines = []
+    lines.append("📌 CANVAS RAPORU")
+    if res.get("ok"):
+        lines.append("✅ CANVAS RAPORU açıldı.")
+    else:
+        lines.append(f"❌ CANVAS RAPORU hata: {res.get('error')}")
+    lines.append(f"• Quiz/Survey bulundu mu? {'EVET' if res.get('quiz_found') else 'HAYIR'}")
+    lines.append(f"• Survey otomatik dolduruldu mu? {'EVET' if res.get('survey_filled') else 'HAYIR'}")
+    lines.append(f"• PDF indirme denendi mi? {'EVET' if res.get('pdf_download') else 'HAYIR'}")
+    if res.get("details"):
+        lines.append("🧾 Detaylar:")
+        for d in res["details"]:
+            lines.append(f"  - {d}")
+    return lines
 
 def main():
-    msg_lines = []
-    msg_lines.append(f"📊 BOT RUN #{_run_no()}")
-    msg_lines.append(f"🕒 Saat: {_now_str()}")
-    msg_lines.append("")  # boş satır
+    run_no = os.getenv("GITHUB_RUN_NUMBER") or "?"
+    now = datetime.datetime.now(TZ)
+
+    print(f"\n[MAIN] BOT RUN #{run_no} | {now.isoformat()}")
+
+    report_lines = []
+    report_lines.append(f"📊 BOT RUN #{run_no}")
+    report_lines.append(f"🕒 Saat: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # UMS
-    try:
-        ums_r = run_ums()
-    except Exception as e:
-        ums_r = {"ok": False, "error": f"UMS crash: {e}", "details": []}
-    msg_lines += _format_portal_report("UMS RAPORU", ums_r)
+    ums_res = run_ums()
+    report_lines.append("")  # boş satır
+    report_lines += format_ums(ums_res)
 
-    msg_lines.append("")  # boş satır
+    # CANVAS
+    canvas_res = run_canvas()
+    report_lines.append("")
+    report_lines += format_canvas(canvas_res)
 
-    # Canvas
-    try:
-        canvas_r = run_canvas()
-    except Exception as e:
-        canvas_r = {"ok": False, "error": f"Canvas crash: {e}", "details": []}
-    msg_lines += _format_portal_report("CANVAS RAPORU", canvas_r)
+    msg = "\n".join(report_lines)
 
-    # Telegram gönder
-    send_telegram("\n".join(msg_lines))
+    print("\n===== TELEGRAM RAPOR =====")
+    print(msg)
+    print("==========================\n")
 
+    send_telegram(msg)
 
 if __name__ == "__main__":
     main()
-    msg = "\n".join(report) if report else "Hiçbir veri çekilemedi."
-print("\n===== TELEGRAM RAPOR =====")
-print(msg)
-print("==========================\n")
-send_telegram(msg)
