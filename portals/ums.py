@@ -14,6 +14,7 @@ def run_ums():
     }
 
     ctx = None
+
     try:
         print("[UMS] ===== START =====")
         print("[UMS] Portal açılıyor...")
@@ -22,17 +23,14 @@ def run_ums():
         page = ctx.new_page()
         page.goto(UMS_URL, wait_until="domcontentloaded", timeout=60000)
 
-        # login kontrol (çok genel)
         page.wait_for_timeout(1500)
         result["ok"] = True
         result["details"].append("UMS login başarılı")
         print("[UMS] ✅ Login OK")
 
-        # DEBUG: Login sonrası neredeyiz?
         print("[UMS] DEBUG after login")
         debug_page(page, "UMS")
 
-        # Sınav sayfasını yakalamak için birkaç olası path dene
         print("[UMS] Exam sayfasına gidiliyor...")
         candidates = [
             UMS_URL + "exams",
@@ -41,11 +39,13 @@ def run_ums():
         ]
 
         exam_page_opened = False
+
         for url in candidates:
             try:
                 print(f"[UMS] Trying exam URL: {url}")
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(2000)  # 1.2 yerine 2.0
+                page.wait_for_timeout(2000)
+
                 print("[UMS] DEBUG after exam goto")
                 debug_page(page, "UMS")
 
@@ -56,56 +56,19 @@ def run_ums():
                 print(f"[UMS] Exam URL failed: {url} | {str(e)[:120]}")
                 continue
 
-        if not exam_page_opened:
-            # En azından ana sayfada text arayalım
-            result["details"].append("Exam URL bulunamadı, ana sayfada kontrol edildi.")
-
-        # DEBUG: Mali yükümlülük kontrolünden hemen önce sayfanın durumu
-        print("[UMS] DEBUG before financial check")
-        debug_page(page, "UMS")
-
-        # Mali yükümlülük tespiti (sayfa içeriğinde string arama)
-        print("[UMS] 'Mali Yükümlülük' aranıyor...")
         html = page.content()
-        if "Mali Yükümlülük" in html or "Mali Yükumluluk" in html:
+
+        print("[UMS] 'Mali Yükümlülük' aranıyor...")
+        if "Mali Yükümlülük" in html:
             result["financial_block"] = True
-            result["details"].append("Mali Yükümlülük uyarısı tespit edildi (erişim kısıtlı olabilir).")
-            print("[UMS] ⚠️ Mali Yükümlülük VAR")
+            result["details"].append("Mali Yükümlülük bulundu")
             return result
-        else:
-            print("[UMS] Mali Yükümlülük yok")
 
-        # Sınav listesini arama (çok genel selector yaklaşımı)
         text = page.inner_text("body")
-        if ("Sınav" in text) and ("Kayıt" in text or "Kayıtlar" in text):
-            result["details"].append("Sınav sayfasında 'Sınav/Kayıt' metni görüldü.")
 
-        # olası liste elemanlarını çek (li, tr)
-        items = []
-        for sel in ["table tr", "ul li", ".card", ".list-group-item"]:
-            try:
-                els = page.query_selector_all(sel)
-                for e in els[:30]:
-                    t = (e.inner_text() or "").strip()
-                    if t and ("202" in t or "Sınav" in t or "Exam" in t):
-                        items.append(t.replace("\n", " | "))
-            except Exception:
-                pass
-
-        # temizle
-        uniq = []
-        seen = set()
-        for it in items:
-            if it not in seen:
-                seen.add(it)
-                uniq.append(it)
-
-        if uniq:
+        if "Sınav" in text or "Exam" in text:
             result["exam_found"] = True
-            result["exam_items"] = uniq[:10]
-            result["details"].append(f"Sınav listesi bulundu: {len(uniq)} satır.")
-        else:
-            result["details"].append("Sınav listesi bulunamadı (sayfa boş/format farklı olabilir).")
+            result["exam_items"].append("Sayfada sınav kelimesi bulundu")
 
         return result
 
@@ -116,4 +79,5 @@ def run_ums():
     finally:
         if ctx:
             close_context(ctx)
+
         print("[UMS] ===== END =====\n")
