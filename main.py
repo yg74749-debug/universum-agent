@@ -1,61 +1,121 @@
-import os
 import datetime
-
+import json
+import os
 from portals.ums import run_ums
 from portals.canvas import run_canvas
 from telegram_notify import send_telegram
 
+RUN_FILE = "run_count.json"
+DAILY_FILE = "daily_report.json"
 
+
+# ---------- RUN COUNT ----------
+def get_run_count():
+    if not os.path.exists(RUN_FILE):
+        return 0
+    with open(RUN_FILE, "r") as f:
+        return json.load(f).get("count", 0)
+
+
+def save_run_count(c):
+    with open(RUN_FILE, "w") as f:
+        json.dump({"count": c}, f)
+
+
+# ---------- DAILY REPORT ----------
+def load_daily():
+    today = datetime.date.today().isoformat()
+    if not os.path.exists(DAILY_FILE):
+        return {"date": today, "done": [], "fail": []}
+
+    data = json.load(open(DAILY_FILE))
+    if data["date"] != today:
+        return {"date": today, "done": [], "fail": []}
+
+    return data
+
+
+def save_daily(data):
+    json.dump(data, open(DAILY_FILE, "w"))
+
+
+# ---------- MAIN ----------
 def main():
-    report = []
-
-    # ✅ Kaçıncı run (GitHub Actions otomatik verir)
-    run_number = os.getenv("GITHUB_RUN_NUMBER", "local")
+    run = get_run_count() + 1
+    save_run_count(run)
 
     now = datetime.datetime.now()
-    header = [
-        f"📊 BOT RUN #{run_number}",
-        f"🕒 Saat: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-        ""
-    ]
+    msg = []
+    msg.append(f"📊 BOT RUN #{run}")
+    msg.append(f"🕒 Saat: {now}")
 
-    # =========================
-    # UMS
-    # =========================
+    daily = load_daily()
+
+    # ---------- UMS ----------
     try:
-        report.append("📌 UMS RAPORU")
         ums_result = run_ums()
+        msg.append("\n📌 UMS RAPORU")
 
-        if ums_result:
-            report += ums_result
+        if ums_result["ok"]:
+            msg.append("✅ UMS açıldı")
+            daily["done"].append("UMS Login")
+
+            if ums_result.get("financial_block"):
+                msg.append("⚠️ Mali Yükümlülük tespit edildi")
+                daily["fail"].append("UMS Mali Borç")
+
+            if ums_result.get("exam_found"):
+                msg.append("📚 Yeni sınav kaydı bulundu")
+
         else:
-            report.append("⚠️ UMS veri bulunamadı.")
+            msg.append(f"❌ UMS hata: {ums_result['error']}")
+            daily["fail"].append("UMS Error")
 
     except Exception as e:
-        report.append(f"❌ UMS hata: {type(e).__name__} - {e}")
+        msg.append(f"❌ UMS crash: {str(e)}")
+        daily["fail"].append("UMS Crash")
 
-    report.append("")
-
-    # =========================
-    # CANVAS
-    # =========================
+    # ---------- CANVAS ----------
     try:
-        report.append("📌 CANVAS RAPORU")
         canvas_result = run_canvas()
+        msg.append("\n📌 CANVAS RAPORU")
 
-        if canvas_result:
-            report += canvas_result
+        if canvas_result["ok"]:
+            msg.append("✅ Canvas açıldı")
+            daily["done"].append("Canvas Login")
+
+            if canvas_result.get("quiz_found"):
+                msg.append("📝 Quiz bulundu")
+
+            if canvas_result.get("survey_filled"):
+                msg.append("🧾 Survey otomatik dolduruldu")
+
+            if canvas_result.get("pdf_download"):
+                msg.append("📄 PDF indirildi")
+
         else:
-            report.append("⚠️ Canvas veri bulunamadı.")
+            msg.append(f"❌ Canvas hata: {canvas_result['error']}")
+            daily["fail"].append("Canvas Error")
 
     except Exception as e:
-        report.append(f"❌ Canvas hata: {type(e).__name__} - {e}")
+        msg.append(f"❌ Canvas crash: {str(e)}")
+        daily["fail"].append("Canvas Crash")
 
-    # =========================
-    # TELEGRAM
-    # =========================
-    final_message = "\n".join(header + report)
-    send_telegram(final_message)
+    save_daily(daily)
+
+    # ---------- GÜNLÜK RAPOR ----------
+    if now.hour == 0:
+        msg.append("\n📅 GÜNLÜK RAPOR")
+        msg.append("✅ Yapılanlar:")
+        msg += ["- " + x for x in set(daily["done"])]
+
+        msg.append("\n⚠️ Yapılamayanlar:")
+        msg += ["- " + x for x in set(daily["fail"])]
+
+        save_daily({"date": datetime.date.today().isoformat(),
+                    "done": [], "fail": []})
+
+    send_telegram("\n".join(msg))
 
 
 if __name__ == "__main__":
