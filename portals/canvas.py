@@ -1,7 +1,6 @@
 # portals/canvas.py
 from urllib.parse import urljoin
-
-from .browser import get_context, close_context
+from .browser import get_context, close_context, debug_page
 
 CANVAS_BASE = "https://canvas.universum-ks.org/"
 
@@ -24,8 +23,8 @@ def run_canvas():
         "ok": False,
         "error": None,
         "quiz_found": False,
-        "survey_filled": False,  # şimdilik false, sonra ekleriz
-        "pdf_download": False,   # şimdilik false, sonra ekleriz
+        "survey_filled": False,
+        "pdf_download": False,
         "found_links": [],
         "details": []
     }
@@ -44,25 +43,31 @@ def run_canvas():
         result["details"].append("Canvas login başarılı")
         print("[CANVAS] ✅ Login OK")
 
+        # 🔍 DEBUG LOGIN SONRASI
+        print("[CANVAS] DEBUG after login")
+        debug_page(page, "CANVAS")
+
         # Course linklerini bul
-        html = page.content()
-        # Canvas'ta course linkleri genelde /courses/ID şeklinde
         links = page.query_selector_all("a[href*='/courses/']")
         course_urls = []
+
         for a in links:
             href = a.get_attribute("href") or ""
             if "/courses/" in href:
                 full = href if href.startswith("http") else urljoin(CANVAS_BASE, href)
-                # aynı course'u tekrar ekleme
                 if full not in course_urls:
                     course_urls.append(full)
 
-        # hiç course bulamazsa: dashboard/course listesi için farklı sayfa dene
+        # Eğer dashboard'ta course yoksa alternatif sayfa
         if not course_urls:
             try:
                 dash = urljoin(CANVAS_BASE, "/courses")
                 page.goto(dash, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(1500)
+
+                print("[CANVAS] DEBUG after /courses page")
+                debug_page(page, "CANVAS")
+
                 links = page.query_selector_all("a[href*='/courses/']")
                 for a in links:
                     href = a.get_attribute("href") or ""
@@ -70,34 +75,43 @@ def run_canvas():
                         full = href if href.startswith("http") else urljoin(CANVAS_BASE, href)
                         if full not in course_urls:
                             course_urls.append(full)
+
                 result["details"].append(f"Course sayfası denendi: {dash}")
-            except Exception:
-                pass
+            except Exception as e:
+                result["details"].append(f"/courses sayfası açılamadı: {str(e)[:80]}")
+
+        print(f"[CANVAS] Found courses: {len(course_urls)}")
+        print(f"[CANVAS] First course sample: {course_urls[0] if course_urls else 'NONE'}")
 
         if not course_urls:
-            result["details"].append("Course linkleri bulunamadı (Canvas ana sayfa/dash farklı olabilir).")
+            result["details"].append("Course linkleri bulunamadı.")
             return result
 
         result["details"].append(f"Bulunan course sayısı: {len(course_urls)}")
 
         found = []
 
-        # her course'ta quizzes + assignments gez
-        for cu in course_urls[:8]:  # spam olmasın, ilk 8 course yeter
+        # Her course'ta quizzes + assignments gez
+        for cu in course_urls[:8]:
             for sub in ["/quizzes", "/assignments"]:
                 target = cu.rstrip("/") + sub
                 try:
+                    print(f"[CANVAS] Visiting: {target}")
                     page.goto(target, wait_until="domcontentloaded", timeout=30000)
-                    page.wait_for_timeout(1200)
+                    page.wait_for_timeout(1500)
+
+                    debug_page(page, "CANVAS")
+
                     body = page.inner_text("body")
 
                     if _contains_any(body):
-                        # sayfadaki ilgili linkleri topla
                         for a in page.query_selector_all("a"):
                             href = a.get_attribute("href") or ""
                             txt = (a.inner_text() or "").strip()
+
                             if not href:
                                 continue
+
                             if _contains_any(txt) or "/quizzes/" in href or "/assignments/" in href:
                                 full = href if href.startswith("http") else urljoin(CANVAS_BASE, href)
                                 if full not in found:
@@ -111,13 +125,14 @@ def run_canvas():
             result["found_links"] = found[:15]
             result["details"].append(f"Quiz/Survey olabilecek link bulundu: {len(found)}")
         else:
-            result["details"].append("Quiz/Survey linki bulunamadı (course içinde içerik yok ya da menü farklı).")
+            result["details"].append("Quiz/Survey linki bulunamadı.")
 
         return result
 
     except Exception as e:
         result["error"] = str(e)
         return result
+
     finally:
         if ctx:
             close_context(ctx)
