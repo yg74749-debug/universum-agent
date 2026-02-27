@@ -13,7 +13,9 @@ def run_canvas():
     print("\n[CANVAS] ===== START =====")
 
     try:
-        context, page = get_context("canvas_state.json")
+        pw, browser, context, page = get_context("canvas_state.json")
+...
+close_context(pw, browser, context)
 
         print("[CANVAS] Dashboard açılıyor...")
         page.goto("https://canvas.universum-ks.org/")
