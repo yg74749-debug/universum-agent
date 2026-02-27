@@ -9,23 +9,49 @@ def run_ums():
         "details": []
     }
 
+    print("\n[UMS] ===== START =====")
+
     try:
-        # ... burada senin mevcut login + sayfa gezme kodun var ...
+        context, page = get_context("ums_state.json")
 
-        # örnek: login başarılıysa
-        result["ok"] = True
-        result["details"].append("UMS login başarılı")
+        print("[UMS] Login sayfası açılıyor...")
+        page.goto("https://ums-student-portal.universum-ks.org/")
+        page.wait_for_timeout(3000)
 
-        # örnek: mali yükümlülük tespiti yaptıysan
-        # result["financial_block"] = True
+        print("[UMS] Login başarılı mı kontrol ediliyor...")
+        if "login" not in page.url:
+            print("[UMS] ✅ Login OK")
+            result["ok"] = True
+            result["details"].append("UMS login başarılı")
+        else:
+            print("[UMS] ❌ Login başarısız")
 
-        # örnek: sınav kaydı gördüysen
-        # result["exam_found"] = True
+        print("[UMS] Exam sayfasına gidiliyor...")
+        page.goto("https://ums-student-portal.universum-ks.org/student/exams")
+        page.wait_for_timeout(4000)
 
+        page_text = page.content()
+
+        print("[UMS] 'Mali Yükümlülük' aranıyor...")
+        if "Mali Yükümlülük" in page_text:
+            print("[UMS] ⚠️ Mali Yükümlülük bulundu!")
+            result["financial_block"] = True
+        else:
+            print("[UMS] Mali Yükümlülük yok")
+
+        print("[UMS] 'Exam Registration' aranıyor...")
+        if "Exam Registration" in page_text or "Sınav Kaydı" in page_text:
+            print("[UMS] 📌 Sınav kaydı bulundu")
+            result["exam_found"] = True
+        else:
+            print("[UMS] Sınav kaydı yok")
+
+        close_context(context)
+
+        print("[UMS] ===== END =====\n")
         return result
 
     except Exception as e:
+        print("[UMS] ❌ CRASH:", str(e))
         result["error"] = str(e)
         return result
-
-    return lines
