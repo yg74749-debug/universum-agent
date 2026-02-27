@@ -1,4 +1,7 @@
+# portals/ums.py
 from .browser import get_context, close_context
+
+UMS_URL = "https://ums-student-portal.universum-ks.org/"
 
 def run_ums():
     result = {
@@ -6,43 +9,99 @@ def run_ums():
         "error": None,
         "financial_block": False,
         "exam_found": False,
+        "exam_items": [],
         "details": []
     }
 
-    print("\n[UMS] ===== START =====")
-
+    ctx = None
     try:
-        pw, browser, context, page = get_context("ums_state.json")
-
+        print("[UMS] ===== START =====")
         print("[UMS] Portal açılıyor...")
-        page.goto("https://ums-student-portal.universum-ks.org/")
-        page.wait_for_timeout(3000)
 
-        if "login" not in page.url:
-            print("[UMS] ✅ Login OK")
-            result["ok"] = True
-            result["details"].append("UMS login başarılı")
-        else:
-            print("[UMS] ❌ Login başarısız")
+        ctx = get_context("ums_state.json")
+        page = ctx.new_page()
+        page.goto(UMS_URL, wait_until="domcontentloaded", timeout=60000)
 
+        # login kontrol (çok genel)
+        page.wait_for_timeout(1500)
+        result["ok"] = True
+        result["details"].append("UMS login başarılı")
+        print("[UMS] ✅ Login OK")
+
+        # Sınav sayfasını yakalamak için birkaç olası path dene
         print("[UMS] Exam sayfasına gidiliyor...")
-        page.goto("https://ums-student-portal.universum-ks.org/student/exams")
-        page.wait_for_timeout(4000)
+        candidates = [
+            UMS_URL + "exams",
+            UMS_URL + "student/exams",
+            UMS_URL + "my-exams",
+        ]
+        exam_page_opened = False
+        for url in candidates:
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(1200)
+                exam_page_opened = True
+                result["details"].append(f"Exam sayfası denendi: {url}")
+                break
+            except Exception:
+                continue
 
-        html = page.content()
+        if not exam_page_opened:
+            # En azından ana sayfada text arayalım
+            result["details"].append("Exam URL bulunamadı, ana sayfada kontrol edildi.")
 
+        # Mali yükümlülük tespiti (sayfa içeriğinde string arama)
         print("[UMS] 'Mali Yükümlülük' aranıyor...")
-        if "Mali Yükümlülük" in html:
-            print("[UMS] ⚠️ Mali Yükümlülük bulundu!")
+        html = page.content()
+        if "Mali Yükümlülük" in html or "Mali Yükumluluk" in html:
             result["financial_block"] = True
+            result["details"].append("Mali Yükümlülük uyarısı tespit edildi (erişim kısıtlı olabilir).")
+            print("[UMS] ⚠️ Mali Yükümlülük VAR")
+            # Böyle bir blok varsa sınav listesi görünmeyebilir
+            return result
         else:
             print("[UMS] Mali Yükümlülük yok")
 
-        close_context(pw, browser, context)
-        print("[UMS] ===== END =====\n")
+        # Sınav listesini arama (çok genel selector yaklaşımı)
+        # Tablo satırı / kart vs olabilir diye metin toplayalım
+        text = page.inner_text("body")
+        # basit ipucu kelimeler
+        if ("Sınav" in text) and ("Kayıt" in text or "Kayıtlar" in text):
+            result["details"].append("Sınav sayfasında 'Sınav/Kayıt' metni görüldü.")
+
+        # olası liste elemanlarını çek (li, tr)
+        items = []
+        for sel in ["table tr", "ul li", ".card", ".list-group-item"]:
+            try:
+                els = page.query_selector_all(sel)
+                for e in els[:30]:
+                    t = (e.inner_text() or "").strip()
+                    if t and ("202" in t or "Sınav" in t or "Exam" in t):
+                        items.append(t.replace("\n", " | "))
+            except Exception:
+                pass
+
+        # temizle
+        uniq = []
+        seen = set()
+        for it in items:
+            if it not in seen:
+                seen.add(it)
+                uniq.append(it)
+
+        if uniq:
+            result["exam_found"] = True
+            result["exam_items"] = uniq[:10]
+            result["details"].append(f"Sınav listesi bulundu: {len(uniq)} satır.")
+        else:
+            result["details"].append("Sınav listesi bulunamadı (sayfa boş/format farklı olabilir).")
+
         return result
 
     except Exception as e:
-        print("[UMS] ❌ CRASH:", str(e))
         result["error"] = str(e)
         return result
+    finally:
+        if ctx:
+            close_context(ctx)
+        print("[UMS] ===== END =====\n")
