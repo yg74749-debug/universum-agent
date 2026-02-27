@@ -1,0 +1,29 @@
+name: Universum Daily Report
+
+on:
+  schedule:
+    - cron: "0 23 * * *"   # 00:00 Prishtina (UTC+1)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: playwright install --with-deps chromium
+
+      - name: Create session files from secrets
+        run: |
+          echo "${{ secrets.UMS_STATE_B64 }}" | base64 -d > ums_state.json
+          echo "${{ secrets.CANVAS_STATE_B64 }}" | base64 -d > canvas_state.json
+
+      - name: Run bot (daily)
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          DAILY_REPORT: "1"
+        run: python main.py
