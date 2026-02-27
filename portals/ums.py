@@ -12,13 +12,12 @@ def run_ums():
     print("\n[UMS] ===== START =====")
 
     try:
-        context, page = get_context("ums_state.json")
+        pw, browser, context, page = get_context("ums_state.json")
 
-        print("[UMS] Login sayfası açılıyor...")
+        print("[UMS] Portal açılıyor...")
         page.goto("https://ums-student-portal.universum-ks.org/")
         page.wait_for_timeout(3000)
 
-        print("[UMS] Login başarılı mı kontrol ediliyor...")
         if "login" not in page.url:
             print("[UMS] ✅ Login OK")
             result["ok"] = True
@@ -30,24 +29,16 @@ def run_ums():
         page.goto("https://ums-student-portal.universum-ks.org/student/exams")
         page.wait_for_timeout(4000)
 
-        page_text = page.content()
+        html = page.content()
 
         print("[UMS] 'Mali Yükümlülük' aranıyor...")
-        if "Mali Yükümlülük" in page_text:
+        if "Mali Yükümlülük" in html:
             print("[UMS] ⚠️ Mali Yükümlülük bulundu!")
             result["financial_block"] = True
         else:
             print("[UMS] Mali Yükümlülük yok")
 
-        print("[UMS] 'Exam Registration' aranıyor...")
-        if "Exam Registration" in page_text or "Sınav Kaydı" in page_text:
-            print("[UMS] 📌 Sınav kaydı bulundu")
-            result["exam_found"] = True
-        else:
-            print("[UMS] Sınav kaydı yok")
-
-        close_context(context)
-
+        close_context(pw, browser, context)
         print("[UMS] ===== END =====\n")
         return result
 
