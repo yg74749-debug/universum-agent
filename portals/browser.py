@@ -1,18 +1,22 @@
 from playwright.sync_api import sync_playwright
 
-def get_context(storage_state_path):
+def get_context(storage_state_path: str):
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=True)
+    browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
     context = browser.new_context(storage_state=storage_state_path)
-    context._pw = pw
-    context._browser = browser
-    return context
+    page = context.new_page()
+    return pw, browser, context, page
 
-def close_context(context):
-    browser = getattr(context, "_browser", None)
-    pw = getattr(context, "_pw", None)
-    context.close()
-    if browser:
+def close_context(pw, browser, context):
+    try:
+        context.close()
+    except Exception:
+        pass
+    try:
         browser.close()
-    if pw:
+    except Exception:
+        pass
+    try:
         pw.stop()
+    except Exception:
+        pass
