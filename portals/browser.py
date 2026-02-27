@@ -20,3 +20,23 @@ def close_context(pw, browser, context):
         pw.stop()
     except Exception:
         pass
+        def debug_page(page, tag=""):
+    try:
+        url = page.url
+    except Exception:
+        url = "?"
+    try:
+        title = page.title()
+    except Exception:
+        title = "?"
+    try:
+        text = page.inner_text("body") or ""
+        text_len = len(text)
+        snippet = text[:400].replace("\n", " ").replace("\r", " ")
+    except Exception:
+        text_len = -1
+        snippet = "?"
+    print(f"[{tag}] URL: {url}")
+    print(f"[{tag}] TITLE: {title}")
+    print(f"[{tag}] BODY_LEN: {text_len}")
+    print(f"[{tag}] SNIP: {snippet}")
