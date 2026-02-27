@@ -1,5 +1,5 @@
 # portals/ums.py
-from .browser import get_context, close_context
+from .browser import get_context, close_context, debug_page
 
 UMS_URL = "https://ums-student-portal.universum-ks.org/"
 
@@ -28,6 +28,10 @@ def run_ums():
         result["details"].append("UMS login başarılı")
         print("[UMS] ✅ Login OK")
 
+        # DEBUG: Login sonrası neredeyiz?
+        print("[UMS] DEBUG after login")
+        debug_page(page, "UMS")
+
         # Sınav sayfasını yakalamak için birkaç olası path dene
         print("[UMS] Exam sayfasına gidiliyor...")
         candidates = [
@@ -35,20 +39,30 @@ def run_ums():
             UMS_URL + "student/exams",
             UMS_URL + "my-exams",
         ]
+
         exam_page_opened = False
         for url in candidates:
             try:
+                print(f"[UMS] Trying exam URL: {url}")
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(2000)  # 1.2 yerine 2.0
+                print("[UMS] DEBUG after exam goto")
+                debug_page(page, "UMS")
+
                 exam_page_opened = True
                 result["details"].append(f"Exam sayfası denendi: {url}")
                 break
-            except Exception:
+            except Exception as e:
+                print(f"[UMS] Exam URL failed: {url} | {str(e)[:120]}")
                 continue
 
         if not exam_page_opened:
             # En azından ana sayfada text arayalım
             result["details"].append("Exam URL bulunamadı, ana sayfada kontrol edildi.")
+
+        # DEBUG: Mali yükümlülük kontrolünden hemen önce sayfanın durumu
+        print("[UMS] DEBUG before financial check")
+        debug_page(page, "UMS")
 
         # Mali yükümlülük tespiti (sayfa içeriğinde string arama)
         print("[UMS] 'Mali Yükümlülük' aranıyor...")
@@ -57,15 +71,12 @@ def run_ums():
             result["financial_block"] = True
             result["details"].append("Mali Yükümlülük uyarısı tespit edildi (erişim kısıtlı olabilir).")
             print("[UMS] ⚠️ Mali Yükümlülük VAR")
-            # Böyle bir blok varsa sınav listesi görünmeyebilir
             return result
         else:
             print("[UMS] Mali Yükümlülük yok")
 
         # Sınav listesini arama (çok genel selector yaklaşımı)
-        # Tablo satırı / kart vs olabilir diye metin toplayalım
         text = page.inner_text("body")
-        # basit ipucu kelimeler
         if ("Sınav" in text) and ("Kayıt" in text or "Kayıtlar" in text):
             result["details"].append("Sınav sayfasında 'Sınav/Kayıt' metni görüldü.")
 
@@ -101,6 +112,7 @@ def run_ums():
     except Exception as e:
         result["error"] = str(e)
         return result
+
     finally:
         if ctx:
             close_context(ctx)
