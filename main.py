@@ -1,121 +1,104 @@
-import datetime
-import json
 import os
+import datetime
+
 from portals.ums import run_ums
 from portals.canvas import run_canvas
 from telegram_notify import send_telegram
 
-RUN_FILE = "run_count.json"
-DAILY_FILE = "daily_report.json"
+
+def _now_str():
+    # GitHub runner UTC kullanır; saat göstermek için yeterli
+    return str(datetime.datetime.now())
 
 
-# ---------- RUN COUNT ----------
-def get_run_count():
-    if not os.path.exists(RUN_FILE):
-        return 0
-    with open(RUN_FILE, "r") as f:
-        return json.load(f).get("count", 0)
+def _run_no():
+    # GitHub Actions her run’a otomatik bir numara verir (en sağlam çözüm)
+    return os.getenv("GITHUB_RUN_NUMBER", "?")
 
 
-def save_run_count(c):
-    with open(RUN_FILE, "w") as f:
-        json.dump({"count": c}, f)
+def _format_portal_report(title: str, r):
+    """
+    r: dict bekliyoruz.
+    Örnek:
+      {
+        "ok": True/False,
+        "error": None/"...",
+        "details": ["...", "..."],
+        "quiz_found": bool,
+        ...
+      }
+    """
+    lines = []
+    lines.append(f"📌 {title}")
+
+    if not isinstance(r, dict):
+        # Beklenmeyen dönüş tipi
+        lines.append(f"❌ {title} crash: Unexpected return type: {type(r).__name__}")
+        return lines
+
+    ok = bool(r.get("ok", False))
+    err = r.get("error")
+
+    if ok:
+        lines.append(f"✅ {title} açıldı.")
+    else:
+        # Hata varsa sebebiyle göster
+        if err:
+            lines.append(f"❌ {title} hata: {err}")
+        else:
+            lines.append(f"❌ {title} başarısız (sebep belirtilmedi).")
+
+    # Özel sinyaller (senin istediğin log/analiz maddeleri)
+    # Canvas tarafı
+    if title.upper() == "CANVAS RAPORU":
+        if "quiz_found" in r:
+            lines.append(f"• Quiz/Survey bulundu mu? {'EVET' if r.get('quiz_found') else 'HAYIR'}")
+        if "survey_filled" in r:
+            lines.append(f"• Survey otomatik dolduruldu mu? {'EVET' if r.get('survey_filled') else 'HAYIR'}")
+        if "pdf_download" in r:
+            lines.append(f"• PDF indirme denendi mi? {'EVET' if r.get('pdf_download') else 'HAYIR'}")
+
+    # UMS tarafı
+    if title.upper() == "UMS RAPORU":
+        if "financial_block" in r:
+            lines.append(f"• 'Mali Yükümlülük' yakalandı mı? {'EVET' if r.get('financial_block') else 'HAYIR'}")
+        if "exam_found" in r:
+            lines.append(f"• Sınav kaydı bulundu mu? {'EVET' if r.get('exam_found') else 'HAYIR'}")
+
+    # Detaylar (varsa)
+    details = r.get("details", [])
+    if isinstance(details, list) and details:
+        lines.append("🧾 Detaylar:")
+        for d in details[:10]:  # spam olmasın diye 10 satır limit
+            lines.append(f"  - {d}")
+
+    return lines
 
 
-# ---------- DAILY REPORT ----------
-def load_daily():
-    today = datetime.date.today().isoformat()
-    if not os.path.exists(DAILY_FILE):
-        return {"date": today, "done": [], "fail": []}
-
-    data = json.load(open(DAILY_FILE))
-    if data["date"] != today:
-        return {"date": today, "done": [], "fail": []}
-
-    return data
-
-
-def save_daily(data):
-    json.dump(data, open(DAILY_FILE, "w"))
-
-
-# ---------- MAIN ----------
 def main():
-    run = get_run_count() + 1
-    save_run_count(run)
+    msg_lines = []
+    msg_lines.append(f"📊 BOT RUN #{_run_no()}")
+    msg_lines.append(f"🕒 Saat: {_now_str()}")
+    msg_lines.append("")  # boş satır
 
-    now = datetime.datetime.now()
-    msg = []
-    msg.append(f"📊 BOT RUN #{run}")
-    msg.append(f"🕒 Saat: {now}")
-
-    daily = load_daily()
-
-    # ---------- UMS ----------
+    # UMS
     try:
-        ums_result = run_ums()
-        msg.append("\n📌 UMS RAPORU")
-
-        if ums_result["ok"]:
-            msg.append("✅ UMS açıldı")
-            daily["done"].append("UMS Login")
-
-            if ums_result.get("financial_block"):
-                msg.append("⚠️ Mali Yükümlülük tespit edildi")
-                daily["fail"].append("UMS Mali Borç")
-
-            if ums_result.get("exam_found"):
-                msg.append("📚 Yeni sınav kaydı bulundu")
-
-        else:
-            msg.append(f"❌ UMS hata: {ums_result['error']}")
-            daily["fail"].append("UMS Error")
-
+        ums_r = run_ums()
     except Exception as e:
-        msg.append(f"❌ UMS crash: {str(e)}")
-        daily["fail"].append("UMS Crash")
+        ums_r = {"ok": False, "error": f"UMS crash: {e}", "details": []}
+    msg_lines += _format_portal_report("UMS RAPORU", ums_r)
 
-    # ---------- CANVAS ----------
+    msg_lines.append("")  # boş satır
+
+    # Canvas
     try:
-        canvas_result = run_canvas()
-        msg.append("\n📌 CANVAS RAPORU")
-
-        if canvas_result["ok"]:
-            msg.append("✅ Canvas açıldı")
-            daily["done"].append("Canvas Login")
-
-            if canvas_result.get("quiz_found"):
-                msg.append("📝 Quiz bulundu")
-
-            if canvas_result.get("survey_filled"):
-                msg.append("🧾 Survey otomatik dolduruldu")
-
-            if canvas_result.get("pdf_download"):
-                msg.append("📄 PDF indirildi")
-
-        else:
-            msg.append(f"❌ Canvas hata: {canvas_result['error']}")
-            daily["fail"].append("Canvas Error")
-
+        canvas_r = run_canvas()
     except Exception as e:
-        msg.append(f"❌ Canvas crash: {str(e)}")
-        daily["fail"].append("Canvas Crash")
+        canvas_r = {"ok": False, "error": f"Canvas crash: {e}", "details": []}
+    msg_lines += _format_portal_report("CANVAS RAPORU", canvas_r)
 
-    save_daily(daily)
-
-    # ---------- GÜNLÜK RAPOR ----------
-    if now.hour == 0:
-        msg.append("\n📅 GÜNLÜK RAPOR")
-        msg.append("✅ Yapılanlar:")
-        msg += ["- " + x for x in set(daily["done"])]
-
-        msg.append("\n⚠️ Yapılamayanlar:")
-        msg += ["- " + x for x in set(daily["fail"])]
-
-        save_daily({"date": datetime.date.today().isoformat(),
-                    "done": [], "fail": []})
-
-    send_telegram("\n".join(msg))
+    # Telegram gönder
+    send_telegram("\n".join(msg_lines))
 
 
 if __name__ == "__main__":
